@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lab1a-sniffer"
+version = "0.1.0"
+description = "实验 1A：macOS 图形化网络嗅探器（分阶段实现）"
+requires-python = ">=3.13,<3.14"
+# PySide6 的基础分发包，包含 QtCore/QtGui/QtWidgets；无需 WebEngine/Addons。
+dependencies = ["PySide6-Essentials>=6.10,<7"]
+
+[project.scripts]
+lab1a-sniffer = "lab1a_sniffer.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lab1a_sniffer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["live: 需要真实 macOS 网卡与 BPF 权限，使用 --run-live 启用"]
