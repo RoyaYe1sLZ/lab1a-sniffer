@@ -1,11 +1,13 @@
-"""阶段 1 端到端验收：只用自行产生、带随机标记的流量验证抓包。"""
+"""抓包与协议解析端到端验收，使用自行产生的标记流量和本机 ping。"""
 
 from contextlib import ExitStack, closing
+from collections import Counter
 from dataclasses import asdict
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -13,6 +15,8 @@ import uuid
 
 from .capture import CaptureConfig, CaptureSession
 from .models import RawPacket
+from .formatting import packet_to_dict
+from .parser import parse_packet
 from .pcap import PcapError, write_pcap
 
 
@@ -40,23 +44,36 @@ def _finish(session: CaptureSession, packets: list[RawPacket]) -> None:
 
 
 def _result(session: CaptureSession, packets: list[RawPacket], checks: dict,
-            output: Path | None) -> dict:
+            output: Path | None, *, analyze: bool = False, filename: str | None = None) -> dict:
     assert session.info is not None
+    filename = filename or session.info.interface
+    analysis = None
+    if analyze:
+        parsed = [parse_packet(packet) for packet in packets]
+        analysis = {
+            "protocol_counts": dict(Counter(packet.protocol for packet in parsed)),
+            "issue_count": sum(len(packet.issues) for packet in parsed),
+            "samples": [packet_to_dict(packet) for packet in parsed[:16]],
+        }
+        checks["no_parse_issues"] = not any(packet.issues for packet in parsed)
     if output is not None:
         output.mkdir(parents=True, exist_ok=True)
-        write_pcap(output / f"{session.info.interface}.pcap", packets, session.info)
-    return {
+        write_pcap(output / f"{filename}.pcap", packets, session.info)
+    result = {
         "interface": session.info.interface,
         "linktype": session.info.linktype,
         "linktype_name": session.info.linktype_name,
         "checks": checks,
         "passed": all(checks.values()),
         "status": asdict(session.status()),
-        "pcap": str(output / f"{session.info.interface}.pcap") if output else None,
+        "pcap": str(output / f"{filename}.pcap") if output else None,
     }
+    if analysis is not None:
+        result["analysis"] = analysis
+    return result
 
 
-def check_loopback(output: Path | None = None) -> dict:
+def check_loopback(output: Path | None = None, *, analyze: bool = False) -> dict:
     marker = f"lab1a-{uuid.uuid4().hex}".encode()
     http_marker, udp4_marker, udp6_marker = [marker + suffix for suffix in (b"-http", b"-udp4", b"-udp6")]
 
@@ -112,10 +129,28 @@ def check_loopback(output: Path | None = None) -> dict:
             "udp_ipv6_marker": any(udp6_marker in p.data for p in packets),
             "stopped_cleanly": session.finished.is_set(),
         }
-        return _result(session, packets, checks, output)
+        if analyze:
+            parsed = [parse_packet(packet) for packet in packets]
+            checks.update({
+                "http_request_fields": any(
+                    p.matches_protocol("HTTP") and p.source == "127.0.0.1"
+                    and p.destination_port == http_port and "GET /lab1a-" in p.summary for p in parsed),
+                "http_response_fields": any(
+                    p.matches_protocol("HTTP") and p.source_port == http_port
+                    and p.summary.startswith("HTTP/1.") and " 200 " in p.summary for p in parsed),
+                "udp_ipv4_fields": any(
+                    p.matches_protocol("UDP") and p.matches_protocol("IPv4")
+                    and p.source == "127.0.0.1" and p.destination_port == udp4_port for p in parsed),
+                "udp_ipv6_fields": any(
+                    p.matches_protocol("UDP") and p.matches_protocol("IPv6")
+                    and p.source == "::1" and p.destination_port == udp6_port for p in parsed),
+                "http_has_lower_layers": any(
+                    all(p.matches_protocol(name) for name in ("HTTP", "TCP", "IPv4")) for p in parsed),
+            })
+        return _result(session, packets, checks, output, analyze=analyze)
 
 
-def check_physical(interface: str = "en0", output: Path | None = None) -> dict:
+def check_physical(interface: str = "en0", output: Path | None = None, *, analyze: bool = False) -> dict:
     if sys.platform != "darwin":
         raise PcapError("物理接口验收目前仅支持 macOS。")
     marker = f"lab1a-{uuid.uuid4().hex}-physical".encode()
@@ -139,10 +174,50 @@ def check_physical(interface: str = "en0", output: Path | None = None) -> dict:
             packets = _collect_until(session, [marker])
         finally:
             _finish(session, packets)
-        return _result(session, packets, {
+        checks = {
             "outbound_udp_marker": any(marker in p.data for p in packets),
             "stopped_cleanly": session.finished.is_set(),
-        }, output)
+        }
+        if analyze:
+            checks["ethernet_ipv4_udp_fields"] = any(
+                all(parsed.matches_protocol(name) for name in ("Ethernet", "IPv4", "UDP"))
+                and parsed.destination == "192.0.2.1" and parsed.destination_port == 59123
+                and parsed.source_port == port for parsed in map(parse_packet, packets))
+        return _result(session, packets, checks, output, analyze=analyze)
+
+
+def check_icmp(output: Path | None = None) -> dict:
+    session = CaptureSession(CaptureConfig(
+        "lo0", bpf="(icmp and host 127.0.0.1) or (icmp6 and host ::1)", duration=8,
+    ))
+    packets = []
+    session.start()
+    try:
+        session.wait_ready()
+        for command in (["/sbin/ping", "-c", "1", "127.0.0.1"], ["/sbin/ping6", "-c", "1", "::1"]):
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=3)
+            except subprocess.TimeoutExpired as exc:
+                raise PcapError(f"本机 ping 超时：{command[-1]}") from exc
+            if result.returncode:
+                raise PcapError(f"本机 ping 失败：{result.stderr.strip() or result.stdout.strip()}")
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            packets.extend(session.drain())
+            protocols = {parse_packet(packet).protocol for packet in packets}
+            if {"ICMP", "ICMPv6"} <= protocols:
+                break
+            if session.finished.wait(0.01):
+                break
+    finally:
+        _finish(session, packets)
+    parsed = [parse_packet(packet) for packet in packets]
+    checks = {
+        "icmp_ipv4_echo": any(p.protocol == "ICMP" and p.source == "127.0.0.1" and "Echo" in p.summary for p in parsed),
+        "icmp_ipv6_echo": any(p.protocol == "ICMPv6" and p.source == "::1" and "Echo" in p.summary for p in parsed),
+        "stopped_cleanly": session.finished.is_set(),
+    }
+    return _result(session, packets, checks, output, analyze=True, filename="icmp")
 
 
 def check_idle_stop() -> dict:

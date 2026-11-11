@@ -54,3 +54,49 @@ class CaptureInfo:
     linktype_name: str
     snapshot_length: int
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PacketField:
+    name: str
+    value: str
+    offset: int
+    length: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProtocolLayer:
+    name: str
+    offset: int
+    length: int
+    fields: tuple[PacketField, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ParseIssue:
+    kind: str
+    message: str
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedPacket:
+    raw: RawPacket
+    layers: tuple[ProtocolLayer, ...]
+    source: str
+    destination: str
+    source_port: int | None
+    destination_port: int | None
+    summary: str
+    issues: tuple[ParseIssue, ...]
+
+    @property
+    def protocol(self) -> str:
+        return self.layers[-1].name if self.layers else "未知"
+
+    @property
+    def protocols(self) -> frozenset[str]:
+        return frozenset(layer.name for layer in self.layers)
+
+    def matches_protocol(self, name: str) -> bool:
+        return name in ("全部", "ALL") or any(p.upper() == name.upper() for p in self.protocols)

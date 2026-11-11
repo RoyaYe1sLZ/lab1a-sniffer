@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from lab1a_sniffer.diagnostics import check_idle_stop, check_loopback, check_physical
+from lab1a_sniffer.diagnostics import check_icmp, check_idle_stop, check_loopback, check_physical
 from lab1a_sniffer.pcap import LiveCapture, PcapError
 
 
@@ -61,3 +61,21 @@ def test_closed_and_cross_thread_access_are_rejected():
 def test_nonexistent_interface_reports_error():
     with pytest.raises(PcapError):
         LiveCapture("lab1a-no-such-interface")
+
+
+def test_analyzed_real_loopback_http_udp4_udp6(tmp_path):
+    result = check_loopback(tmp_path, analyze=True)
+    assert result["passed"], result
+    assert result["analysis"]["issue_count"] == 0
+    assert result["analysis"]["protocol_counts"]["HTTP"] >= 2
+
+
+def test_analyzed_real_ethernet_udp(request, tmp_path):
+    result = check_physical(request.config.getoption("--physical-interface"), tmp_path, analyze=True)
+    assert result["passed"], result
+
+
+def test_analyzed_real_icmp4_and_icmp6(tmp_path):
+    result = check_icmp(tmp_path)
+    assert result["passed"], result
+    assert result["analysis"]["issue_count"] == 0
