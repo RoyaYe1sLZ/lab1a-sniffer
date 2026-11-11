@@ -205,7 +205,7 @@ def test_clear_resets_table_details_and_statistics(window):
     QTest.mouseClick(window.clear_button, Qt.MouseButton.LeftButton)
     assert not window.model.rowCount() and not window.tree.topLevelItemCount()
     assert not window.hex_view.toPlainText()
-    assert "0 个包" in window.count_label.text()
+    assert "显示 0 / 全部 0" in window.count_label.text()
     assert not window.clear_button.isEnabled()
 
 
@@ -228,8 +228,9 @@ def test_missing_interfaces_disables_capture(qapp):
 
 
 @pytest.mark.live
-def test_real_gui_capture_and_close(qapp):
+def test_real_gui_capture_and_close(qapp, monkeypatch):
     value = SnifferWindow(interfaces_provider=lambda: [Interface("lo0", "", 7)])
+    monkeypatch.setattr(value, "_confirm_replace", lambda _: True)
     value.show()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
         sender.bind(("127.0.0.1", 0))

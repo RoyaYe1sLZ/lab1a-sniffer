@@ -89,10 +89,10 @@ def main():
             expected = {"HTTP", "UDP", "ICMP", "ICMPv6"}
             wait_for(lambda: expected <= {p.protocol for p in window.model.packets})
             row = next(i for i, p in enumerate(window.model.packets) if p.protocol == "HTTP")
-            window.table.scrollTo(window.model.index(row, 0))
+            window.table.scrollTo(window.proxy.index(row, 0))
             app.processEvents()
             QTest.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
-                             pos=window.table.visualRect(window.model.index(row, 4)).center())
+                             pos=window.table.visualRect(window.proxy.index(row, 4)).center())
             checks["row_selection"] = window.current_packet is not None and window.current_packet.protocol == "HTTP"
             window.tree.collapseAll()
             http_item = next(window.tree.topLevelItem(i) for i in range(window.tree.topLevelItemCount())
@@ -150,6 +150,8 @@ def main():
             checks["no_capture_threads_left"] = not any(t.name.startswith("pcap-") for t in threading.enumerate())
     finally:
         window.controller.shutdown()
+        window.files.shutdown()
+        window.dirty = False
         window.close()
         app.processEvents()
     report["passed"] = all(checks.values())

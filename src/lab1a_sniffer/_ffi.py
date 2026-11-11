@@ -89,6 +89,7 @@ class Libpcap:
         self._bind("pcap_setfilter", [ptr, C.POINTER(BpfProgram)], integer)
         self._bind("pcap_freecode", [C.POINTER(BpfProgram)], None)
         self._bind("pcap_open_dead", [integer, integer], ptr)
+        self._bind("pcap_open_offline", [char, char], ptr)
         self._bind("pcap_dump_open", [ptr, char], ptr)
         self._bind("pcap_dump", [ptr, C.POINTER(PacketHeader), C.POINTER(C.c_ubyte)], None)
         self._bind("pcap_dump_flush", [ptr], integer)

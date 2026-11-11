@@ -1,35 +1,12 @@
 """数据包表格与缓存限额；仅在 Qt 主线程更新。"""
 
-from dataclasses import fields, is_dataclass
 from datetime import datetime
-import sys
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
 from .models import ParsedPacket
-
-
-def packet_memory_cost(packet: ParsedPacket) -> int:
-    """计算本包 Python 对象占用；跨包共享对象重复计费，作为保守缓存预算。
-
-    除原始字节外也计算字段、字符串及容器，避免只限制原始字节而忽略解析对象。
-    此值不是整个进程的 RSS，也不包含 Qt 渲染开销。
-    """
-    seen = set()
-
-    def size(value):
-        if id(value) in seen:
-            return 0
-        seen.add(id(value))
-        result = sys.getsizeof(value)
-        if is_dataclass(value) and not isinstance(value, type):
-            result += sum(size(getattr(value, field.name)) for field in fields(value))
-        elif isinstance(value, (tuple, list, frozenset)):
-            result += sum(size(item) for item in value)
-        return result
-
-    return size(packet)
+from .storage import LoadedCapture, packet_memory_cost
 
 
 class PacketTableModel(QAbstractTableModel):
@@ -115,3 +92,34 @@ class PacketTableModel(QAbstractTableModel):
         self.raw_bytes = self.memory_cost = self.rejected_count = 0
         self.limit_message = ""
         self.endResetModel()
+
+    def replace_capture(self, capture: LoadedCapture):
+        if len(capture.packets) > self.max_packets or capture.memory_cost > self.max_memory:
+            raise ValueError("导入结果超过模型缓存预算。")
+        self.beginResetModel()
+        self.packets = list(capture.packets)
+        self.memory_cost = capture.memory_cost
+        self.raw_bytes = capture.raw_bytes
+        self.limit_message = ""
+        self.rejected_count = 0
+        self.endResetModel()
+
+
+class ProtocolFilterModel(QSortFilterProxyModel):
+    PROTOCOLS = ("全部", "HTTP", "TCP", "UDP", "IPv4", "IPv6", "ICMP", "ICMPv6")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.protocol = "全部"
+        self.setDynamicSortFilter(True)
+
+    def set_protocol(self, protocol: str):
+        if protocol not in self.PROTOCOLS:
+            raise ValueError("未知的协议显示过滤条件。")
+        self.beginFilterChange()
+        self.protocol = protocol
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
+    def filterAcceptsRow(self, source_row, source_parent):
+        model = self.sourceModel()
+        return model is not None and 0 <= source_row < len(model.packets) and model.packets[source_row].matches_protocol(self.protocol)
