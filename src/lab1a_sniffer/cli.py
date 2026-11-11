@@ -19,6 +19,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="实验 1A 嗅探器 · 抓包与分层协议分析")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("interfaces", help="列出 libpcap 可用网卡")
+    commands.add_parser("gui", help="打开图形化实时抓包界面")
     capture = commands.add_parser("capture", help="限时抓包，Ctrl+C 可提前停止")
     capture.add_argument("-i", "--interface", required=True, help="例如 en0 或 lo0")
     capture.add_argument("-f", "--filter", default="", help="BPF 表达式，例如 'tcp or udp'")
@@ -81,6 +82,9 @@ def _capture(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "gui":
+            from .gui import run_gui
+            return run_gui()
         if args.command == "interfaces":
             print(get_libpcap().version)
             for interface in list_interfaces():

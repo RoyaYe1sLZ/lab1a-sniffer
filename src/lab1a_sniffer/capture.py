@@ -67,6 +67,15 @@ class CaptureSession:
     def start(self) -> None:
         self._thread.start()
 
+    @property
+    def is_ready(self) -> bool:
+        """供 GUI 非阻塞查询初始化结果，不在界面线程调用 wait_ready。"""
+        return self._ready.is_set()
+
+    @property
+    def pending_count(self) -> int:
+        return self._queue.qsize()
+
     def wait_ready(self, timeout: float = 5.0) -> CaptureInfo:
         if not self._ready.wait(timeout):
             self.request_stop()
