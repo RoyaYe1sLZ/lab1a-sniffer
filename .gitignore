@@ -8,3 +8,6 @@ __pycache__/
 artifacts/
 dist/
 build/
+
+# IDE 本机配置
+.idea/

@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
     QSizePolicy, QSplitter, QStackedWidget, QTableView, QTextEdit, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget, QTabWidget,
 )
 
 from .capture import CaptureConfig, CaptureStatus
 from .gui_controller import CaptureController
 from .gui_files import FileController
+from .gui_flows import FlowPanel
+from .gui_processes import ProcessController
 from .gui_models import PacketTableModel, ProtocolFilterModel
 from .parser import hex_dump
 from .pcap import list_interfaces
@@ -83,7 +85,7 @@ def byte_size(value):
 
 class SnifferWindow(QMainWindow):
     def __init__(self, *, controller=None, interfaces_provider=list_interfaces,
-                 max_packets=20000, max_memory=128 * 1024 * 1024):
+                 max_packets=20000, max_memory=128 * 1024 * 1024, process_scanner=None):
         super().__init__()
         self.setObjectName("SnifferWindow")
         self.setWindowTitle("网络嗅探器 · 实验 1A")
@@ -92,6 +94,7 @@ class SnifferWindow(QMainWindow):
         self.resize(min(1320, int(geometry.width() * .92)), min(860, int(geometry.height() * .9)))
         self.controller = controller or CaptureController(self)
         self.files = FileController(self)
+        self.process_monitor = ProcessController(self, **({"scanner": process_scanner} if process_scanner else {}))
         self.model = PacketTableModel(self, max_packets=max_packets, max_memory=max_memory)
         self.proxy = ProtocolFilterModel(self)
         self.proxy.setSourceModel(self.model)
@@ -103,6 +106,8 @@ class SnifferWindow(QMainWindow):
         self.current_packet = None
         self._hex_limit = 4096
         self._closing = False
+        self._follow_filter = None
+        self._flow_dirty = True
         self._last_status = CaptureStatus()
         self._build()
         self.controller.sessionStarted.connect(self._session_started)
@@ -113,6 +118,13 @@ class SnifferWindow(QMainWindow):
         self.files.stateChanged.connect(self._file_state_changed)
         self.files.completed.connect(self._file_completed)
         self.files.problem.connect(self._problem)
+        self.process_monitor.completed.connect(self._process_snapshot)
+        self.process_monitor.statusChanged.connect(self.flow_panel.process_status.setText)
+        self.process_monitor.idle.connect(self._process_idle)
+        self.flow_timer = QTimer(self)
+        self.flow_timer.setInterval(500)
+        self.flow_timer.timeout.connect(self._refresh_flows)
+        self.flow_timer.start()
         self.refresh_interfaces()
         self._state_changed("idle")
         self._update_status(self._last_status)
@@ -225,6 +237,18 @@ class SnifferWindow(QMainWindow):
         self.source_label = label("尚未捕获或打开文件", "muted")
         self.source_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         packet_layout.addWidget(self.source_label)
+        follow_bar = QHBoxLayout()
+        self.follow_current_button = QPushButton("追踪所选包的 TCP 流")
+        self.follow_current_button.setEnabled(False)
+        self.follow_current_button.clicked.connect(self._follow_current)
+        follow_bar.addWidget(self.follow_current_button)
+        self.flow_filter_label = label("连接过滤：全部", "muted")
+        self.flow_filter_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        follow_bar.addWidget(self.flow_filter_label, 1)
+        self.clear_flow_button = QPushButton("取消连接过滤")
+        self.clear_flow_button.clicked.connect(lambda: self._follow(None, ""))
+        follow_bar.addWidget(self.clear_flow_button)
+        packet_layout.addLayout(follow_bar)
         self.table = QTableView()
         self.table.setObjectName("packetTable")
         self.table.setModel(self.proxy)
@@ -300,7 +324,15 @@ class SnifferWindow(QMainWindow):
         lower.setMinimumHeight(220)
         vertical.addWidget(lower)
         vertical.setSizes([340, 290])
-        outer.addWidget(vertical, 1)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(vertical, "数据包")
+        self.flow_panel = FlowPanel(self.model)
+        self.flow_panel.followRequested.connect(self._follow)
+        self.flow_panel.packetRequested.connect(self._jump_packet)
+        self.flow_panel.processEnabled.connect(self._process_enabled)
+        self.tabs.addTab(self.flow_panel, "TCP 流与进程")
+        self.tabs.currentChanged.connect(lambda _: self._refresh_flows(force=True))
+        outer.addWidget(self.tabs, 1)
 
         footer = QHBoxLayout()
         self.link_label = label("接口 —  ·  链路 —", "muted")
@@ -392,6 +424,7 @@ class SnifferWindow(QMainWindow):
             self.capture_info = result.info
             self.source_path = self._loading_path
             self.source_kind = "file"
+            self._reset_flows()
             self.controller.last_error = ""
             self._last_status = CaptureStatus(packets_read=len(result.packets), bytes_read=result.raw_bytes,
                                               stop_reason="离线文件")
@@ -433,9 +466,10 @@ class SnifferWindow(QMainWindow):
 
     def _refresh_packet_view(self):
         visible, total = self.proxy.rowCount(), self.model.rowCount()
+        self.clear_flow_button.setEnabled(self._follow_filter is not None)
         self.packet_stack.setCurrentWidget(self.table if visible else self.empty)
         if total and not visible:
-            title, hint = "没有符合显示过滤的数据包", f"全部 {total:,} 个包仍保留，可切换为“全部”查看。"
+            title, hint = "没有符合显示过滤的数据包", f"全部 {total:,} 个包仍保留，可切换协议为“全部”并取消连接过滤查看。"
         elif self.files.is_active and self.files.operation == "loading":
             title, hint = "正在读取文件…", "读取成功后才替换当前列表。"
         elif self.source_kind == "file" and not total:
@@ -469,6 +503,7 @@ class SnifferWindow(QMainWindow):
         if self.controller.is_active or self.files.is_active or not self._confirm_replace("清空当前数据包列表？"):
             return
         self.model.clear()
+        self._reset_flows()
         self.capture_info = None
         self.source_path = None
         self.source_kind = ""
@@ -487,6 +522,8 @@ class SnifferWindow(QMainWindow):
         self.capture_info = info
         self.source_path = None
         self.source_kind = "live"
+        self._reset_flows()
+        self._process_enabled(self.flow_panel.process_check.isChecked())
         self.dirty = False
         self._clear_details()
         self.packet_stack.setCurrentWidget(self.empty)
@@ -498,6 +535,8 @@ class SnifferWindow(QMainWindow):
         before = self.proxy.rowCount()
         added = self.model.append_packets(packets)
         if added:
+            self._flow_dirty = True
+            self._sync_flow_filter()
             self.dirty = True
             self._refresh_packet_view()
             if before == 0 and self.proxy.rowCount():
@@ -511,6 +550,11 @@ class SnifferWindow(QMainWindow):
 
     def _state_changed(self, state):
         active = state != "idle" or self.files.is_active
+        self.flow_panel.process_check.setEnabled(self.source_kind == "live" and state == "capturing" and not self._closing)
+        if state == "idle" or self._closing:
+            self.process_monitor.set_enabled(False)
+            if self.source_kind == "live":
+                self.flow_panel.process_status.setText("抓包已停止，保留本轮已观测的进程线索。经典 PCAP 不保存进程信息。")
         for widget in (self.interfaces, self.refresh_button, self.bpf):
             widget.setEnabled(not active and not self._closing)
         self.start_button.setEnabled(not active and not self._closing and self.interfaces.count() > 0)
@@ -567,6 +611,7 @@ class SnifferWindow(QMainWindow):
 
     def _clear_details(self):
         self.current_packet = None
+        self.follow_current_button.setEnabled(False)
         self.tree.clear()
         self.hex_view.clear()
         self.hex_view.setExtraSelections([])
@@ -583,6 +628,7 @@ class SnifferWindow(QMainWindow):
         self.current_packet = packet
         self.tree.clear()
         self._hex_limit = 4096
+        self.follow_current_button.setEnabled(source.row() in self.model.flows.row_flow)
         self._render_hex()
         raw = packet.raw
         self.packet_meta.setText(f"第 {source.row() + 1} 包 · 已捕获 {raw.captured_length} / 线上 {raw.wire_length} 字节"
@@ -652,6 +698,87 @@ class SnifferWindow(QMainWindow):
             self.hex_view.setTextCursor(selections[0].cursor)
             self.hex_view.ensureCursorVisible()
 
+    def _reset_flows(self):
+        self.process_monitor.set_enabled(False)
+        self._follow_filter = None
+        self.proxy.set_flows()
+        self.flow_filter_label.setText("连接过滤：全部")
+        self.flow_panel.reset()
+        self._flow_dirty = True
+        if self.source_kind == "file":
+            self.flow_panel.process_status.setText("离线 PCAP 无历史进程信息，只分析 TCP 流；不查询当前进程进行猜测。")
+
+    def _refresh_flows(self, *, force=False):
+        if force or (self._flow_dirty and self.tabs.currentIndex() == 1):
+            self.flow_panel.refresh()
+            self._flow_dirty = False
+
+    def _sync_flow_filter(self):
+        ids = None
+        if self._follow_filter:
+            kind, value = self._follow_filter
+            ids = {value} if kind == "flow" else {f.id for f in self.model.flows.flows.values() if value in f.owners}
+        if (None if ids is None else frozenset(ids)) != self.proxy.flow_ids:
+            self.proxy.set_flows(ids)
+
+    def _follow(self, target, title):
+        self._follow_filter = target
+        self._sync_flow_filter()
+        self.flow_filter_label.setText("连接过滤：" + (title or "全部"))
+        self.flow_filter_label.setToolTip(self.flow_filter_label.text())
+        self.tabs.setCurrentIndex(0)
+        if self.proxy.rowCount():
+            self.table.selectRow(0)
+        else:
+            self._clear_details()
+        self._refresh_packet_view()
+        self._update_status(self._last_status)
+
+    def _follow_current(self):
+        source = self.proxy.mapToSource(self.table.currentIndex())
+        flow_id = self.model.flows.row_flow.get(source.row()) if source.isValid() else None
+        if flow_id is not None:
+            self._follow(("flow", flow_id), f"TCP 流 {flow_id}")
+            self.flow_panel.process_filter.setCurrentIndex(0)
+            self.flow_panel.refresh()
+            self.flow_panel.table.setCurrentItem(self.flow_panel._items[flow_id])
+            self.tabs.setCurrentIndex(1)
+
+    def _jump_packet(self, row):
+        if not 0 <= row < self.model.rowCount():
+            return
+        self.display_filter.setCurrentText("全部")
+        flow_id = self.model.flows.row_flow.get(row)
+        self._follow(("flow", flow_id), f"TCP 流 {flow_id}")
+        index = self.proxy.mapFromSource(self.model.index(row, 0))
+        if index.isValid():
+            self.table.selectRow(index.row())
+            self.table.scrollTo(index)
+            self.auto_scroll.setChecked(False)
+
+    def _process_enabled(self, enabled):
+        active = enabled and self.source_kind == "live" and self.controller.state in ("starting", "capturing") and not self._closing
+        self.process_monitor.set_enabled(active)
+        if active:
+            self.flow_panel.process_status.setText("正在采集当前用户 TCP 套接字快照…")
+        elif self.source_kind == "live" and not enabled:
+            self.flow_panel.process_status.setText("进程采样已关闭，保留已观测的线索。")
+
+    def _process_snapshot(self, snapshot):
+        if self.source_kind != "live":
+            return
+        self.model.flows.associate(snapshot)
+        self._flow_dirty = True
+        self._sync_flow_filter()
+        self._refresh_packet_view()
+        self._update_status(self._last_status)
+        stamp = datetime.fromtimestamp(snapshot.ended_us / 1e6).strftime("%H:%M:%S")
+        self.flow_panel.process_status.setText(f"快照 {stamp} · {snapshot.message}")
+
+    def _process_idle(self):
+        if self._closing and not self.controller.is_active and not self.files.is_active:
+            QTimer.singleShot(0, self.close)
+
     def closeEvent(self, event):
         if self.files.is_active:
             self._closing = True
@@ -667,7 +794,13 @@ class SnifferWindow(QMainWindow):
             self._closing = True
             self.controller.stop()
             event.ignore()
+        elif self.process_monitor.is_busy:
+            self._closing = True
+            self.process_monitor.set_enabled(False)
+            event.ignore()
         else:
+            self.flow_timer.stop()
+            self.process_monitor.shutdown()
             event.accept()
 
 
@@ -688,5 +821,6 @@ def run_gui() -> int:
     window = SnifferWindow()
     app.aboutToQuit.connect(window.controller.shutdown)
     app.aboutToQuit.connect(window.files.shutdown)
+    app.aboutToQuit.connect(window.process_monitor.shutdown)
     window.show()
     return app.exec()

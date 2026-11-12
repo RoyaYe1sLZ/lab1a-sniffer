@@ -6,6 +6,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyMod
 from PySide6.QtGui import QColor
 
 from .models import ParsedPacket
+from .flows import FlowTracker
 from .storage import LoadedCapture, packet_memory_cost
 
 
@@ -19,6 +20,7 @@ class PacketTableModel(QAbstractTableModel):
         if max_packets < 1 or max_memory < 1:
             raise ValueError("缓存限额必须大于零。")
         self.packets: list[ParsedPacket] = []
+        self.flows = FlowTracker(max_packets=min(max_packets, 20000))
         self.max_packets = max_packets
         self.max_memory = max_memory
         self.raw_bytes = 0
@@ -82,6 +84,8 @@ class PacketTableModel(QAbstractTableModel):
         if accepted:
             start = len(self.packets)
             self.beginInsertRows(QModelIndex(), start, start + len(accepted) - 1)
+            for row, packet in enumerate(accepted, start):
+                self.flows.add(row, packet)
             self.packets.extend(accepted)
             self.endInsertRows()
         return len(accepted)
@@ -89,6 +93,7 @@ class PacketTableModel(QAbstractTableModel):
     def clear(self):
         self.beginResetModel()
         self.packets.clear()
+        self.flows = FlowTracker(max_packets=min(self.max_packets, 20000))
         self.raw_bytes = self.memory_cost = self.rejected_count = 0
         self.limit_message = ""
         self.endResetModel()
@@ -98,6 +103,9 @@ class PacketTableModel(QAbstractTableModel):
             raise ValueError("导入结果超过模型缓存预算。")
         self.beginResetModel()
         self.packets = list(capture.packets)
+        self.flows = FlowTracker(max_packets=min(self.max_packets, 20000))
+        for row, packet in enumerate(self.packets):
+            self.flows.add(row, packet)
         self.memory_cost = capture.memory_cost
         self.raw_bytes = capture.raw_bytes
         self.limit_message = ""
@@ -111,6 +119,7 @@ class ProtocolFilterModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.protocol = "全部"
+        self.flow_ids = None
         self.setDynamicSortFilter(True)
 
     def set_protocol(self, protocol: str):
@@ -120,6 +129,14 @@ class ProtocolFilterModel(QSortFilterProxyModel):
         self.protocol = protocol
         self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
 
+    def set_flows(self, ids=None):
+        self.beginFilterChange()
+        self.flow_ids = None if ids is None else frozenset(ids)
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
     def filterAcceptsRow(self, source_row, source_parent):
         model = self.sourceModel()
-        return model is not None and 0 <= source_row < len(model.packets) and model.packets[source_row].matches_protocol(self.protocol)
+        if model is None or not 0 <= source_row < len(model.packets):
+            return False
+        return (model.packets[source_row].matches_protocol(self.protocol)
+                and (self.flow_ids is None or model.flows.row_flow.get(source_row) in self.flow_ids))
