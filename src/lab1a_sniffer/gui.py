@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QModelIndex, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout,
+    QApplication, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
     QSizePolicy, QSplitter, QStackedWidget, QTableView, QTextEdit, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget, QTabWidget,
@@ -22,49 +22,8 @@ from .parser import hex_dump
 from .pcap import list_interfaces
 
 
-STYLE = """
-QMainWindow, QWidget#root { background: #f1f4f8; color: #20334c; }
-QWidget { font-family: 'PingFang SC'; font-size: 12px; color: #20334c; }
-QFrame#hero { background: #152940; border-radius: 10px; }
-QLabel#eyebrow { color: #a7b9cf; font-size: 11px; }
-QLabel#title { color: #ffffff; font-size: 23px; font-weight: 600; }
-QLabel#subtitle { color: #b9c8da; }
-QLabel#stateBadge { border-radius: 6px; padding: 7px 14px; font-weight: 600; }
-QFrame#controls, QFrame#panel { background: #ffffff; border: 1px solid #dce3ed; border-radius: 8px; }
-QLabel#formLabel { color: #65758b; font-size: 11px; }
-QLabel#panelTitle { font-size: 13px; font-weight: 600; }
-QLabel#muted { color: #7a899c; font-size: 11px; }
-QLabel#packetCount { color: #52708f; background: #edf3f9; border-radius: 4px; padding: 3px 9px; }
-QLabel#emptyTitle { color: #3c536f; font-size: 17px; font-weight: 600; }
-QLabel#emptyHint { color: #7b8b9e; font-size: 12px; }
-QLabel#banner { background: #fff4df; color: #825817; border: 1px solid #f0dbb4;
-                border-radius: 6px; padding: 9px 12px; }
-QComboBox, QLineEdit { background: #ffffff; border: 1px solid #cfdae7; border-radius: 5px;
-                       padding: 7px 9px; selection-background-color: #d7e9fa; }
-QComboBox:focus, QLineEdit:focus { border: 1px solid #4688bd; }
-QPushButton { background: #f8fafc; border: 1px solid #cfdae7; border-radius: 5px;
-              padding: 8px 13px; font-weight: 500; }
-QPushButton:hover { background: #eef4fa; border-color: #99b3cf; }
-QPushButton:pressed { background: #e0ebf6; }
-QPushButton#start { background: #197b83; color: white; border-color: #197b83; }
-QPushButton#start:hover { background: #126970; }
-QPushButton:disabled { background: #f0f3f6; color: #a8b3c1; border-color: #e0e6ee; }
-QPushButton#start:disabled { background: #dbe9ea; color: #93adaf; border-color: #dbe9ea; }
-QTableView { border: none; background: white; alternate-background-color: #f7f9fc;
-             selection-background-color: #deedf8; selection-color: #163a5a; gridline-color: #edf1f6; }
-QHeaderView::section { background: #f4f7fb; color: #65758b; border: none;
-                       border-bottom: 1px solid #e1e8f0; padding: 8px 9px; font-size: 11px; }
-QTreeWidget { background: white; border: none; selection-background-color: #deedf8;
-              selection-color: #163a5a; outline: 0; }
-QTreeWidget::item { padding: 3px 1px; }
-QPlainTextEdit#hexView { background: #17283d; color: #d9e4f0; border: none; border-radius: 5px;
-                        font-family: 'Menlo'; font-size: 11px; selection-background-color: #335d82; }
-QSplitter::handle { background: #f1f4f8; }
-QCheckBox { color: #65758b; spacing: 6px; }
-QScrollBar:vertical { width: 11px; background: #f4f7fa; }
-QScrollBar::handle:vertical { background: #c5d1df; border-radius: 4px; min-height: 28px; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-"""
+from .gui_theme import STYLE
+from .gui_widgets import ChoiceBox, NetworkMark, PacketDelegate, ProtocolSelector, ToggleSwitch, line_icon
 
 
 def label(text="", name="", parent=None):
@@ -134,143 +93,156 @@ class SnifferWindow(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(18, 16, 18, 12)
-        outer.setSpacing(12)
+        outer.setContentsMargins(14, 8, 14, 10)
+        outer.setSpacing(9)
 
-        hero = QFrame()
-        hero.setObjectName("hero")
-        header = QHBoxLayout(hero)
-        header.setContentsMargins(21, 14, 21, 14)
-        titles = QVBoxLayout()
-        titles.setSpacing(3)
-        titles.addWidget(label("软件与系统安全 / 实验 1A", "eyebrow"))
-        titles.addWidget(label("网络嗅探器", "title"))
-        header.addLayout(titles)
+        header_frame = QFrame()
+        header_frame.setObjectName("appHeader")
+        header = QHBoxLayout(header_frame)
+        header.setContentsMargins(2, 3, 2, 4)
+        header.setSpacing(12)
+        header.addWidget(NetworkMark())
+        header.addWidget(label("网络嗅探器", "title"))
+        header.addWidget(label("实验 1A", "subtitle"))
         header.addStretch()
+        self.clear_button = QPushButton("清空")
+        self.clear_button.setObjectName("quietAction")
+        self.clear_button.setToolTip("清空当前缓存；有未保存数据时会要求确认。")
+        self.clear_button.clicked.connect(self.clear_packets)
+        header.addWidget(self.clear_button)
         self.badge = label("● 就绪", "stateBadge")
         header.addWidget(self.badge)
-        outer.addWidget(hero)
+        outer.addWidget(header_frame)
 
         controls = QFrame()
         controls.setObjectName("controls")
         bar = QHBoxLayout(controls)
-        bar.setContentsMargins(16, 12, 16, 12)
-        bar.setSpacing(12)
-        nic = QVBoxLayout()
-        nic.setSpacing(5)
-        nic.addWidget(label("网络接口", "formLabel"))
-        nic_row = QHBoxLayout()
-        self.interfaces = QComboBox()
+        bar.setContentsMargins(12, 10, 12, 10)
+        bar.setSpacing(9)
+        bar.addWidget(label("网络接口", "formLabel"))
+        self.interfaces = ChoiceBox()
         self.interfaces.setObjectName("interfaceCombo")
-        self.interfaces.setMinimumWidth(170)
-        self.refresh_button = QPushButton("刷新")
-        self.refresh_button.setObjectName("refreshButton")
+        self.interfaces.setFixedWidth(150)
+        bar.addWidget(self.interfaces)
+        self.refresh_button = QPushButton()
+        self.refresh_button.setObjectName("quietAction")
+        self.refresh_button.setIcon(line_icon("refresh"))
+        self.refresh_button.setFixedSize(28, 32)
+        self.refresh_button.setToolTip("刷新网络接口")
+        self.refresh_button.setAccessibleName("刷新网络接口")
         self.refresh_button.clicked.connect(self.refresh_interfaces)
-        nic_row.addWidget(self.interfaces)
-        nic_row.addWidget(self.refresh_button)
-        nic.addLayout(nic_row)
-        bar.addLayout(nic)
-        filters = QVBoxLayout()
-        filters.setSpacing(5)
-        filters.addWidget(label("抓包过滤 · BPF", "formLabel"))
+        bar.addWidget(self.refresh_button)
+        bar.addSpacing(5)
+        bar.addWidget(label("抓包过滤 · BPF", "formLabel"))
         self.bpf = QLineEdit()
         self.bpf.setObjectName("bpfEdit")
-        self.bpf.setPlaceholderText("例如 tcp or udp，留空捕获全部")
+        self.bpf.setAccessibleName("抓包过滤表达式")
+        self.bpf.setPlaceholderText("tcp or udp，留空捕获全部")
         self.bpf.setClearButtonEnabled(True)
-        self.bpf.setMinimumWidth(230)
+        self.bpf.setMinimumWidth(130)
         self.bpf.returnPressed.connect(self.start_capture)
-        filters.addWidget(self.bpf)
-        bar.addLayout(filters, 1)
-        actions = QVBoxLayout()
-        actions.addWidget(label("操作", "formLabel"))
-        buttons = QHBoxLayout()
+        bar.addWidget(self.bpf, 1)
         self.start_button = QPushButton("▶  开始抓包")
         self.start_button.setObjectName("start")
         self.start_button.clicked.connect(self.start_capture)
-        self.stop_button = QPushButton("■  停止")
+        self.stop_button = QPushButton("■  停止抓包")
         self.stop_button.setObjectName("stopButton")
         self.stop_button.clicked.connect(self.controller.stop)
-        self.clear_button = QPushButton("清空")
-        self.clear_button.setObjectName("clearButton")
-        self.clear_button.clicked.connect(self.clear_packets)
-        for button in (self.start_button, self.stop_button, self.clear_button):
-            buttons.addWidget(button)
-        actions.addLayout(buttons)
-        bar.addLayout(actions)
+        self.capture_actions = QStackedWidget()
+        self.capture_actions.setFixedSize(112, 34)
+        self.capture_actions.addWidget(self.start_button)
+        self.capture_actions.addWidget(self.stop_button)
+        bar.addWidget(self.capture_actions)
+        self.open_button = QPushButton("打开 PCAP")
+        self.open_button.setObjectName("openButton")
+        self.open_button.setIcon(line_icon("open"))
+        self.open_button.clicked.connect(lambda: self.open_file())
+        self.save_button = QPushButton("保存全部")
+        self.save_button.setObjectName("saveButton")
+        self.save_button.setIcon(line_icon("save"))
+        self.save_button.setToolTip("保存全部缓存包，不受协议、连接或进程显示过滤影响。")
+        self.save_button.clicked.connect(lambda: self.save_file())
+        bar.addWidget(self.open_button)
+        bar.addWidget(self.save_button)
         outer.addWidget(controls)
+
+        metrics = QFrame()
+        metrics.setObjectName("metrics")
+        metric_bar = QHBoxLayout(metrics)
+        metric_bar.setContentsMargins(16, 8, 16, 8)
+        metric_bar.setSpacing(20)
+        self.metric_labels = {}
+        for index, (key, title) in enumerate((("captured", "已捕获"), ("visible", "当前显示"),
+                                              ("flows", "TCP 连接"), ("bytes", "数据量"))):
+            if index:
+                divider = QFrame()
+                divider.setObjectName("metricDivider")
+                divider.setFixedSize(1, 22)
+                metric_bar.addWidget(divider)
+            group = QHBoxLayout()
+            group.setSpacing(12)
+            group.addWidget(label(title, "metricCaption"))
+            value = label("0", "metricValue")
+            self.metric_labels[key] = value
+            group.addWidget(value)
+            group.addStretch()
+            metric_bar.addLayout(group, 1)
+        self.metric_labels["bytes"].setToolTip("当前缓存包的原始字节总量；Python 对象缓存预算另见底栏。")
+        outer.addWidget(metrics)
 
         self.banner = label("", "banner")
         self.banner.setWordWrap(True)
         self.banner.hide()
         outer.addWidget(self.banner)
-
         vertical = QSplitter(Qt.Orientation.Vertical)
-        vertical.setHandleWidth(10)
+        vertical.setHandleWidth(8)
         packet_panel, packet_layout = self._panel()
         packet_header = QHBoxLayout()
-        packet_header.addWidget(label("数据包", "panelTitle"))
-        self.count_label = label("0 个包", "packetCount")
-        packet_header.addWidget(self.count_label)
-        packet_header.addStretch()
-        packet_header.addWidget(label("显示过滤", "formLabel"))
-        self.display_filter = QComboBox()
-        self.display_filter.setObjectName("displayFilter")
+        packet_header.setSpacing(12)
+        packet_header.addWidget(label("数据包列表", "panelTitle"))
+        self.display_filter = ProtocolSelector()
         self.display_filter.addItems(ProtocolFilterModel.PROTOCOLS)
-        self.display_filter.setMinimumWidth(100)
-        self.display_filter.setToolTip("仅改变显示；HTTP 包也匹配其 TCP 和 IP 层。")
+        self.display_filter.setToolTip("仅改变显示；HTTP 包也匹配其 TCP 和 IP 层。方向键可以切换协议。")
         self.display_filter.currentTextChanged.connect(self._filter_changed)
         packet_header.addWidget(self.display_filter)
-        self.open_button = QPushButton("打开 PCAP")
-        self.open_button.setObjectName("openButton")
-        self.open_button.clicked.connect(lambda: self.open_file())
-        self.save_button = QPushButton("保存全部")
-        self.save_button.setObjectName("saveButton")
-        self.save_button.setToolTip("保存全部缓存包，不受显示过滤影响。")
-        self.save_button.clicked.connect(lambda: self.save_file())
-        packet_header.addWidget(self.open_button)
-        packet_header.addWidget(self.save_button)
-        self.auto_scroll = QCheckBox("自动滚动")
+        packet_header.addStretch()
+        self.auto_scroll = ToggleSwitch("自动滚动")
         self.auto_scroll.setChecked(True)
         self.auto_scroll.setToolTip("新包到达时滚动至底部；点击数据包可暂停自动滚动。")
         packet_header.addWidget(self.auto_scroll)
         packet_layout.addLayout(packet_header)
         self.source_label = label("尚未捕获或打开文件", "muted")
         self.source_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        packet_layout.addWidget(self.source_label)
-        follow_bar = QHBoxLayout()
-        self.follow_current_button = QPushButton("追踪所选包的 TCP 流")
-        self.follow_current_button.setEnabled(False)
-        self.follow_current_button.clicked.connect(self._follow_current)
-        follow_bar.addWidget(self.follow_current_button)
-        self.flow_filter_label = label("连接过滤：全部", "muted")
-        self.flow_filter_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        follow_bar.addWidget(self.flow_filter_label, 1)
-        self.clear_flow_button = QPushButton("取消连接过滤")
-        self.clear_flow_button.clicked.connect(lambda: self._follow(None, ""))
-        follow_bar.addWidget(self.clear_flow_button)
-        packet_layout.addLayout(follow_bar)
+        self.count_label = label("显示 0 / 全部 0", "packetCount")
         self.table = QTableView()
         self.table.setObjectName("packetTable")
         self.table.setModel(self.proxy)
+        self.table.setItemDelegate(PacketDelegate(self.table))
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(28)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setMinimumSectionSize(48)
-        for column, width in enumerate((56, 128, 180, 180, 80, 64)):
+        self.table.horizontalHeader().setMinimumSectionSize(45)
+        for column, width in enumerate((50, 132, 160, 160, 76, 58)):
             self.table.setColumnWidth(column, width)
         self.table.selectionModel().currentRowChanged.connect(self._select_packet)
         self.table.clicked.connect(lambda _: self.auto_scroll.setChecked(False))
         self.empty = QWidget()
         empty_layout = QVBoxLayout(self.empty)
         empty_layout.addStretch()
+        mark_row = QHBoxLayout()
+        mark_row.addStretch()
+        mark_row.addWidget(NetworkMark())
+        mark_row.addStretch()
+        empty_layout.addLayout(mark_row)
         self.empty_title = label("准备捕获第一个数据包", "emptyTitle")
         self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_hint = label("选择网络接口并点击开始抓包。\n回环流量请选择 lo0，常规网络访问请选择 en0。", "emptyHint")
+        self.empty_hint = label("选择网络接口开始抓包，或打开一个 PCAP 文件。", "emptyHint")
         self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(self.empty_title)
         empty_layout.addWidget(self.empty_hint)
@@ -280,11 +252,29 @@ class SnifferWindow(QMainWindow):
         self.packet_stack.addWidget(self.empty)
         self.packet_stack.setCurrentWidget(self.empty)
         packet_layout.addWidget(self.packet_stack, 1)
-        packet_panel.setMinimumHeight(170)
+        follow_bar = QHBoxLayout()
+        self.follow_current_button = QPushButton("追踪 TCP 流")
+        self.follow_current_button.setObjectName("quietAction")
+        self.follow_current_button.setIcon(line_icon("trace", "#147e82"))
+        self.follow_current_button.setEnabled(False)
+        self.follow_current_button.setToolTip("查看所选数据包所属连接的方向时序。")
+        self.follow_current_button.clicked.connect(self._follow_current)
+        follow_bar.addWidget(self.follow_current_button)
+        follow_bar.addWidget(self.source_label, 1)
+        self.flow_filter_label = label("连接过滤：全部", "muted")
+        self.flow_filter_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        follow_bar.addWidget(self.flow_filter_label, 1)
+        self.clear_flow_button = QPushButton("取消连接过滤")
+        self.clear_flow_button.setObjectName("quietAction")
+        self.clear_flow_button.clicked.connect(lambda: self._follow(None, ""))
+        follow_bar.addWidget(self.count_label)
+        follow_bar.addWidget(self.clear_flow_button)
+        packet_layout.addLayout(follow_bar)
+        packet_panel.setMinimumHeight(190)
         vertical.addWidget(packet_panel)
 
         lower = QSplitter(Qt.Orientation.Horizontal)
-        lower.setHandleWidth(10)
+        lower.setHandleWidth(8)
         details_panel, details_layout = self._panel()
         details_layout.addWidget(label("协议详情", "panelTitle"))
         self.packet_meta = label("选择一个数据包，查看封装层次与字段。", "muted")
@@ -293,12 +283,12 @@ class SnifferWindow(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setObjectName("protocolTree")
         self.tree.setHeaderLabels(["字段", "值"])
-        self.tree.setColumnWidth(0, 190)
+        self.tree.setColumnWidth(0, 160)
         self.tree.header().setStretchLastSection(True)
+        self.tree.setUniformRowHeights(True)
         self.tree.currentItemChanged.connect(self._select_field)
         details_layout.addWidget(self.tree, 1)
         lower.addWidget(details_panel)
-
         raw_panel, raw_layout = self._panel()
         raw_header = QHBoxLayout()
         raw_header.addWidget(label("原始字节", "panelTitle"))
@@ -306,7 +296,7 @@ class SnifferWindow(QMainWindow):
         self.raw_meta = label("十六进制 / ASCII", "muted")
         raw_header.addWidget(self.raw_meta)
         self.full_bytes_button = QPushButton("显示全部")
-        self.full_bytes_button.setObjectName("fullBytesButton")
+        self.full_bytes_button.setObjectName("quietAction")
         self.full_bytes_button.setEnabled(False)
         self.full_bytes_button.clicked.connect(self._show_all_bytes)
         raw_header.addWidget(self.full_bytes_button)
@@ -316,15 +306,18 @@ class SnifferWindow(QMainWindow):
         self.hex_view.setReadOnly(True)
         self.hex_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.hex_view.setFont(QFont("Menlo", 11))
-        self.hex_view.document().setDocumentMargin(12)
-        self.hex_view.setPlaceholderText("选中数据包后显示原始字节。")
+        self.hex_view.document().setDocumentMargin(14)
+        self.hex_view.setPlaceholderText("选择数据包后，显示十六进制与 ASCII。")
         raw_layout.addWidget(self.hex_view, 1)
         lower.addWidget(raw_panel)
-        lower.setSizes([480, 740])
-        lower.setMinimumHeight(220)
+        lower.setSizes([450, 790])
+        lower.setMinimumHeight(230)
         vertical.addWidget(lower)
-        vertical.setSizes([340, 290])
+        vertical.setSizes([360, 240])
+        vertical.setStretchFactor(0, 3)
+        vertical.setStretchFactor(1, 2)
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("workspaceTabs")
         self.tabs.addTab(vertical, "数据包")
         self.flow_panel = FlowPanel(self.model)
         self.flow_panel.followRequested.connect(self._follow)
@@ -333,8 +326,8 @@ class SnifferWindow(QMainWindow):
         self.tabs.addTab(self.flow_panel, "TCP 流与进程")
         self.tabs.currentChanged.connect(lambda _: self._refresh_flows(force=True))
         outer.addWidget(self.tabs, 1)
-
         footer = QHBoxLayout()
+        footer.setContentsMargins(2, 2, 2, 0)
         self.link_label = label("接口 —  ·  链路 —", "muted")
         self.link_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.stats_label = label("", "muted")
@@ -349,8 +342,8 @@ class SnifferWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("panel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(13, 10, 13, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(7)
         return panel, layout
 
     def refresh_interfaces(self):
@@ -467,6 +460,8 @@ class SnifferWindow(QMainWindow):
     def _refresh_packet_view(self):
         visible, total = self.proxy.rowCount(), self.model.rowCount()
         self.clear_flow_button.setEnabled(self._follow_filter is not None)
+        self.clear_flow_button.setVisible(self._follow_filter is not None)
+        self.flow_filter_label.setVisible(self._follow_filter is not None)
         self.packet_stack.setCurrentWidget(self.table if visible else self.empty)
         if total and not visible:
             title, hint = "没有符合显示过滤的数据包", f"全部 {total:,} 个包仍保留，可切换协议为“全部”并取消连接过滤查看。"
@@ -558,6 +553,7 @@ class SnifferWindow(QMainWindow):
         for widget in (self.interfaces, self.refresh_button, self.bpf):
             widget.setEnabled(not active and not self._closing)
         self.start_button.setEnabled(not active and not self._closing and self.interfaces.count() > 0)
+        self.capture_actions.setCurrentWidget(self.start_button if state == "idle" else self.stop_button)
         self.stop_button.setEnabled(state in ("starting", "capturing") and not self._closing and not self.files.is_active)
         self.clear_button.setEnabled(not active and not self._closing and self.model.rowCount() > 0)
         self.open_button.setEnabled(not active and not self._closing)
@@ -566,7 +562,7 @@ class SnifferWindow(QMainWindow):
                 "starting": "正在打开接口", "capturing": "正在抓包", "stopping": "正在停止"}[state]
         if self.files.is_active:
             text = "正在读取文件" if self.files.operation == "loading" else "正在保存文件"
-        background, foreground = ("#d9f2eb", "#116851") if state == "capturing" else ("#e9eff6", "#3f5975")
+        background, foreground = ("#e0f3ec", "#197861") if state == "capturing" else ("#eaf0f3", "#667e8c")
         if self._closing:
             text = "正在安全关闭"
         elif self.controller.last_error and state == "idle" and not self.files.is_active:
@@ -587,8 +583,12 @@ class SnifferWindow(QMainWindow):
         self._last_status = status
         visible, total = self.proxy.rowCount(), self.model.rowCount()
         self.count_label.setText(f"显示 {visible:,} / 全部 {total:,}")
+        self.metric_labels["captured"].setText(f"{total if self.source_kind == 'file' else status.packets_read:,}")
+        self.metric_labels["visible"].setText(f"{visible:,}")
+        self.metric_labels["flows"].setText(f"{len(self.model.flows.flows):,}")
+        self.metric_labels["bytes"].setText(byte_size(self.model.raw_bytes))
         dropped = str(status.kernel.dropped) if status.kernel is not None else "—"
-        text = (f"已捕获 {status.packets_read:,}  ·  缓存 {byte_size(self.model.memory_cost)}"
+        text = (f"缓存 {byte_size(self.model.memory_cost)}"
                 f"  ·  队列丢弃 {status.queue_dropped:,}  ·  内核丢包 {dropped}")
         if self.model.rejected_count:
             text += f"  ·  未入缓存 {self.model.rejected_count:,}"
@@ -596,7 +596,7 @@ class SnifferWindow(QMainWindow):
         if status.kernel:
             self.stats_label.setToolTip(f"内核接收 {status.kernel.received}；接口丢包 {status.kernel.interface_dropped}（部分平台不支持）")
         if self.source_kind == "file":
-            self.stats_label.setText(f"离线 {total:,} 个包  ·  缓存 {byte_size(self.model.memory_cost)}")
+            self.stats_label.setText(f"离线浏览  ·  缓存 {byte_size(self.model.memory_cost)}")
         origin = f"离线 · {self.source_path.name}" if self.source_kind == "file" and self.source_path else (
             f"实时 · {self.capture_info.interface}" if self.capture_info else "尚未捕获或打开文件")
         if self.capture_info:
@@ -690,7 +690,7 @@ class SnifferWindow(QMainWindow):
                 cursor.setPosition(block.position() + a)
                 cursor.setPosition(block.position() + b, QTextCursor.MoveMode.KeepAnchor)
                 selection.cursor = cursor
-                selection.format.setBackground(QColor("#356a83"))
+                selection.format.setBackground(QColor("#237c7c"))
                 selection.format.setForeground(QColor("#ffffff"))
                 selections.append(selection)
         self.hex_view.setExtraSelections(selections)

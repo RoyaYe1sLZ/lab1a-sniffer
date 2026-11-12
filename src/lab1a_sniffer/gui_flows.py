@@ -1,8 +1,10 @@
 """TCP 连接浏览、按进程聚合与分页方向时序。"""
 from datetime import datetime
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                              QTreeWidget, QTreeWidgetItem, QComboBox, QSplitter, QCheckBox)
+                              QTreeWidget, QTreeWidgetItem, QSplitter, QFrame)
+from .gui_widgets import ChoiceBox, ToggleSwitch, line_icon
 from .flows import tcp_segment
 
 
@@ -27,45 +29,62 @@ class FlowPanel(QWidget):
         self._page = 0
         self._signature = None
         self._processes = ()
+        self._mono_font = QFont("Menlo", 10)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(8)
+        controls = QFrame()
+        controls.setObjectName("flowControls")
+        control_layout = QVBoxLayout(controls)
+        control_layout.setContentsMargins(12, 10, 12, 10)
+        control_layout.setSpacing(9)
         toolbar = QHBoxLayout()
-        self.process_filter = QComboBox()
-        self.process_filter.setMinimumWidth(250)
+        toolbar.setSpacing(9)
+        self.process_filter = ChoiceBox()
+        self.process_filter.setMinimumWidth(210)
+        self.process_filter.setMaximumWidth(320)
         self.process_filter.addItem("全部进程 / 未关联", None)
         self.process_filter.currentIndexChanged.connect(self._process_changed)
         toolbar.addWidget(plain("进程"))
         toolbar.addWidget(self.process_filter)
         self.follow = QPushButton("仅看所选连接")
+        self.follow.setObjectName("primaryAction")
+        self.follow.setIcon(line_icon("trace", "white"))
         self.follow.clicked.connect(self.follow_selected)
         toolbar.addWidget(self.follow)
         self.follow_process = QPushButton("查看该进程已关联 TCP 包")
         self.follow_process.clicked.connect(self.follow_owner)
         toolbar.addWidget(self.follow_process)
         self.all_packets = QPushButton("取消连接过滤")
+        self.all_packets.setObjectName("quietAction")
         self.all_packets.clicked.connect(lambda: self.followRequested.emit(None, ""))
         toolbar.addWidget(self.all_packets)
         toolbar.addStretch()
-        layout.addLayout(toolbar)
+        control_layout.addLayout(toolbar)
         options = QHBoxLayout()
-        self.process_check = QCheckBox("实时关联本机进程")
+        self.process_check = ToggleSwitch("实时关联本机进程")
         self.process_check.setChecked(True)
         self.process_check.toggled.connect(self.processEnabled)
         options.addWidget(self.process_check)
         self.process_status = plain("开始实时抓包后，每约 1 秒查询当前用户的 TCP 套接字。")
+        self.process_status.setObjectName("muted")
         options.addWidget(self.process_status, 1)
-        layout.addLayout(options)
+        control_layout.addLayout(options)
+        layout.addWidget(controls)
         self.summary = plain("尚无 TCP 连接。实时抓包与离线 PCAP 均可建立连接索引。")
+        self.summary.setObjectName("flowSummary")
         layout.addWidget(self.summary)
         split = QSplitter(Qt.Orientation.Vertical)
         self.table = QTreeWidget()
         self.table.setObjectName("flowTable")
         self.table.setRootIsDecorated(False)
         self.table.setAlternatingRowColors(True)
-        self.table.setMinimumHeight(105)
+        self.table.setMinimumHeight(115)
+        self.table.setUniformRowHeights(True)
         self.table.setHeaderLabels(["流", "端点 A", "端点 B", "观测状态", "A→B 包/字节", "B→A 包/字节", "进程线索"])
         for column, width in enumerate((50, 220, 220, 115, 135, 135, 180)):
             self.table.setColumnWidth(column, width)
+        self.table.header().setStretchLastSection(True)
         self.table.currentItemChanged.connect(self._selection_changed)
         split.addWidget(self.table)
         bottom = QWidget()
@@ -73,11 +92,13 @@ class FlowPanel(QWidget):
         lower = QVBoxLayout(bottom)
         lower.setContentsMargins(0, 8, 0, 0)
         self.detail = plain("选择连接后查看方向、相对时间和 TCP 标志；双击时序行定位原始包。")
+        self.detail.setObjectName("flowDetail")
         lower.addWidget(self.detail)
         self.timeline = QTreeWidget()
         self.timeline.setObjectName("flowTimeline")
         self.timeline.setRootIsDecorated(False)
-        self.timeline.setMinimumHeight(130)
+        self.timeline.setMinimumHeight(140)
+        self.timeline.setUniformRowHeights(True)
         self.timeline.setHeaderLabels(["原包序号", "相对时间 ms", "A                 B", "TCP 标志 / Seq / Ack", "载荷字节"])
         for column, width in enumerate((85, 105, 150, 550, 85)):
             self.timeline.setColumnWidth(column, width)
@@ -85,11 +106,14 @@ class FlowPanel(QWidget):
         lower.addWidget(self.timeline, 1)
         paging = QHBoxLayout()
         self.previous = QPushButton("上一页")
+        self.previous.setObjectName("quietAction")
         self.previous.clicked.connect(lambda: self._change_page(-1))
         self.next = QPushButton("下一页")
+        self.next.setObjectName("quietAction")
         self.next.clicked.connect(lambda: self._change_page(1))
         self.page_label = plain("")
         self.page_label.setWordWrap(False)
+        self.page_label.setObjectName("muted")
         paging.addWidget(self.previous)
         paging.addWidget(self.next)
         paging.addWidget(self.page_label)
@@ -136,6 +160,8 @@ class FlowPanel(QWidget):
                 item = QTreeWidgetItem(self.table)
                 item.setData(0, Qt.ItemDataRole.UserRole, flow.id)
                 self._items[flow.id] = item
+                for col in (0, 1, 2, 4, 5):
+                    item.setFont(col, self._mono_font)
             values = [str(flow.id), str(flow.a), str(flow.b), flow.state,
                       f"{flow.counts[0]} / {flow.wire_bytes[0]:,}", f"{flow.counts[1]} / {flow.wire_bytes[1]:,}",
                       "; ".join(str(p) for p in flow.owners) or "未关联"]
@@ -194,6 +220,9 @@ class FlowPanel(QWidget):
             direction = "A ───────→ B" if seg.source == flow.a else "A ←─────── B"
             item = QTreeWidgetItem(self.timeline, [str(row + 1), f"{(packet.raw.timestamp_us - flow.first_us) / 1000:.3f}",
                                                   direction, packet.summary, str(seg.payload_length)])
+            item.setFont(0, self._mono_font)
+            item.setFont(1, self._mono_font)
+            item.setFont(4, self._mono_font)
             item.setData(0, Qt.ItemDataRole.UserRole, row)
         handshake = f"{flow.handshake_us / 1000:.3f} ms" if flow.handshake_us is not None else "未完整观测"
         owners = "; ".join(f"{p}（快照 {datetime.fromtimestamp(t / 1e6).strftime('%H:%M:%S')}）" for p, t in flow.owners.items())
