@@ -1,0 +1,19 @@
+$ /usr/sbin/tcpdump -nn -S -vv -r /Users/roya/Documents/ChatGPT/security project/samples/protocols.pcap
+06:13:20.123456 IP (tos 0x0, ttl 64, id 4660, offset 0, flags [none], proto TCP (6), length 113)
+    192.0.2.1.12345 > 198.51.100.2.8080: Flags [P.], cksum 0xeaaf (correct), seq 16909060:16909133, ack 84281096, win 4096, length 73: HTTP, length: 73
+	GET /lab1a?x=1 HTTP/1.1
+	Host: example.test
+	X-Test: one
+	X-Test: two
+	
+06:13:20.123456 IP (tos 0x0, ttl 64, id 4660, offset 0, flags [none], proto TCP (6), length 80)
+    198.51.100.2.8080 > 192.0.2.1.12345: Flags [P.], cksum 0x5544 (correct), seq 16909060:16909100, ack 84281096, win 4096, length 40: HTTP, length: 40
+	HTTP/1.1 200 OK
+	Content-Length: 2
+	
+	OK [|http]
+06:13:20.123456 IP6 (flowlabel 0x12345, hlim 32, next-header UDP (17) payload length: 14) 2001:db8::1.12345 > 2001:db8::2.54321: [udp sum ok] UDP, length 6
+06:13:20.123456 IP (tos 0x0, ttl 64, id 4660, offset 0, flags [none], proto ICMP (1), length 32)
+    192.0.2.1 > 198.51.100.2: ICMP echo request, id 4660, seq 7, length 12
+06:13:20.123456 IP6 (flowlabel 0x12345, hlim 32, next-header ICMPv6 (58) payload length: 12) 2001:db8::1 > 2001:db8::2: [icmp6 sum ok] ICMP6, echo request, id 4660, seq 9
+reading from file /Users/roya/Documents/ChatGPT/security project/samples/protocols.pcap, link-type EN10MB (Ethernet)
