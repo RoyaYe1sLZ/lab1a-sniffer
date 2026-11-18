@@ -6,6 +6,10 @@
 
 仓库地址：https://github.com/RoyaYe1sLZ/lab1a-sniffer
 
+## 实验提交包
+
+[下载完整作业 ZIP（源码、报告、演示视频）](https://github.com/RoyaYe1sLZ/lab1a-sniffer/releases/tag/submission-2026-11-18) · [文件信息与 SHA-256 校验](docs/提交包说明.md)
+
 ## 功能概览
 
 | 模块 | 功能 |
